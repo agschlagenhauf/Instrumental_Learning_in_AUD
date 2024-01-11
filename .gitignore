@@ -1,0 +1,7 @@
+#
+# .gitignore
+#
+
+Output/
+html/
+bih_hpc_commands.txt

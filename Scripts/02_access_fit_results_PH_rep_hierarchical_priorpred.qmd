@@ -1,0 +1,718 @@
+---
+title: "Acces Hierarchical Pearce-Hall with C Model Results"
+author: "Milena Musial"
+output: html_document
+date: '2023-09-24'
+format: 
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    number-sections: true
+    fig-width: 8
+    fig-height: 6
+    fig-format: svg
+    editor_options: 
+    chunk_output_type: console
+---
+
+# Setup
+
+```{r}
+rm(list=ls())
+libs<-c("rstan", "gdata", "bayesplot", "stringr", "dplyr", "ggplot2", "loo", "posterior")
+sapply(libs, require, character.only=TRUE)
+
+datapath <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_Stan_Modeling'
+out_path <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_Stan_Modeling/Output'
+behavpath <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_DATA'
+
+fit_file <- 'fit_n_71_2024-01-10_bandit2arm_delta_PH_rep_hierarchical_estimation0_delta0.9_stepsize0.5.rds'
+
+fit <- readRDS(file.path(out_path, fit_file)) # Stan model output
+load(file.path(behavpath,"Behav/behav_final_redcap_n71.RData")) # Behav and redcap data
+
+color_scheme_set("mix-blue-pink")
+```
+
+Load data from prior predictive checks (estimation==0) or from model fitting (estimation==1)?
+```{r}
+estimation <- 0
+```
+
+# Output summary (contents of fit object)
+
+Untransformed parameters
+
+-   mu: overall group-level means of learning rate (alpha), inverse temperature (tau), gamma, and pi (across all subjects and sessions)
+
+-   _sub_m: subject-level raw parameters
+
+-   _sub_con_m: condition-level raw parameters
+
+-   _int_m: cross-level interaction effects
+
+-   _visit_s: visit-level (within-subject) SDs
+
+-   _subj_s: SDs of visit-level effects across subjects
+
+-   _visit_raw: non-centered parameterization (ncp) variance effect per visit & subject
+
+-   _subj_raw: NCP variance effect on subj-level effects
+
+-   _subj_L: Cholesky factors of correlation matrices for subj-level variances
+
+Transformed parameters
+
+-   **A**, **tau**, **gamma**, **pi_normal**: transformed visit-in-subject-level parameters in appropriate range (0-1 for alpha, 0-20 for tau)
+
+-   **_normal**: visit-in-subject-level parameters, not yet in appropriate range (for all pars except pi)
+
+-   **_vars**: SDs per visit-level effect (random intercept and slope variances), derived from Cholesky factorized correlation matrix
+
+Generated quantities
+
+-   **mu_**: transformed group-level mean of parameters
+
+-   log_lik: likelihood of choice per trial, condition, and subject
+
+-   y_pred: choice data generated from estimated parameters
+
+-   softmax_ev_chosen: choice probability of chosen option
+
+-   PE_pred: PEs per subject and trial
+
+-   ev_pred: Q-values for both choices per subject and trial
+
+-   ev_chosen_pred: Q-values for chosen card per subject and trial
+
+-   _cor: correlation matrix per parameter
+
+# Convergence / sampler diagnostics
+
+## Summary statistics for parameters
+
+### Across chains
+
+```{r}
+fit_sum <- summary(fit)
+
+# overall summary
+print(fit_sum$summary[,9:10])
+```
+
+-   All `Rhat` values are \< 1.01, meaning that chains have converged! \`
+
+-   All `n_eff` (measure of the effective sample size) are \> 1/100th (360) or 1/1000th (36) of number of iterations (3600). Anything over an `n_eff` of 100 is usually "fine"
+
+## Bulk effective sample size
+
+```{r}
+if (estimation==1) {
+  # extract posterior draws
+  posterior_mat <- extract(fit, permuted = F)
+  
+  # define parameter names
+  parameter_names <- c("mu[1]", "A_sub_m[1]", "A_sub_con_m[1]", "A_int_m[1,1]", "A_visit_s", "A_subj_s[1]", "A_subj_s[2]", 
+                      "A_visit_raw[20,1]", "A_visit_raw[20,2]", "A_subj_raw[1,20]",
+                      "A_subj_raw[2,20]", "A[20,1]", "A[20,2]", "A_normal[20,1]", "A_normal[20,2]",
+                      "A_vars[20,1]", "A_vars[20,2]", "mu_A",
+                      "mu[2]", "tau_sub_m[1]", "tau_sub_con_m[1]", "tau_int_m[1,1]", "tau_visit_s", "tau_subj_s[1]", "tau_subj_s[2]", 
+                      "tau_visit_raw[20,1]", "tau_visit_raw[20,2]", "tau_subj_raw[1,20]",
+                      "tau_subj_raw[2,20]", "tau[20,1]", "tau[20,2]", "tau_normal[20,1]", "tau_normal[20,2]",
+                      "tau_vars[20,1]", "tau_vars[20,2]", "mu_tau",
+                      "mu[3]", "gamma_sub_m[1]", "gamma_sub_con_m[1]", "gamma_int_m[1,1]", "gamma_visit_s", "gamma_subj_s[1]", "gamma_subj_s[2]", 
+                      "gamma_visit_raw[20,1]", "gamma_visit_raw[20,2]", "gamma_subj_raw[1,20]",
+                      "gamma_subj_raw[2,20]", "gamma[20,1]", "gamma[20,2]", "gamma_normal[20,1]", "gamma_normal[20,2]",
+                      "gamma_vars[20,1]", "gamma_vars[20,2]", "mu_gamma",
+                      "mu[4]", "pi_sub_m[1]", "pi_sub_con_m[1]", "pi_int_m[1,1]", "pi_visit_s", "pi_subj_s[1]", "pi_subj_s[2]", 
+                      "pi_visit_raw[20,1]", "pi_visit_raw[20,2]", "pi_subj_raw[1,20]",
+                      "pi_subj_raw[2,20]", "pi_normal[20,1]", "pi_normal[20,2]",
+                      "pi_vars[20,1]", "pi_vars[20,2]", "mu_pi")
+  
+  # create vector for bulk ess and fill them up iteratively
+  bulk_neff <- c()
+  
+  for (par in parameter_names) {
+    par_mat <- extract_variable_matrix(posterior_mat, variable = par)
+    bulk_neff <- append(bulk_neff,ess_bulk(par_mat))
+  }
+  
+  min(bulk_neff)
+  ess_df <- data.frame(parameter_names,bulk_neff)
+  print(ess_df)
+  
+}
+```
+
+## Traceplots of model parameters
+
+```{r}
+traceplot(fit, pars=c("mu[1]", "A_sub_m[1]", "A_sub_con_m[1]", "A_int_m[1,1]", "A_visit_s", "A_subj_s[1]", "A_subj_s[2]", 
+                      "A_visit_raw[20,1]", "A_visit_raw[20,2]", "A_subj_raw[1,20]",
+                      "A_subj_raw[2,20]", "A_subj_L", "A[20,1]", "A[20,2]", "A_normal[20,1]", "A_normal[20,2]",
+                      "A_vars[20,1]", "A_vars[20,2]", "mu_A"), inc_warmup=T)
+
+traceplot(fit, pars=c("mu[2]", "tau_sub_m[1]", "tau_sub_con_m[1]", "tau_int_m[1,1]", "tau_visit_s", "tau_subj_s[1]", "tau_subj_s[2]", 
+                      "tau_visit_raw[20,1]", "tau_visit_raw[20,2]", "tau_subj_raw[1,20]",
+                      "tau_subj_raw[2,20]", "tau_subj_L", "tau[20,1]", "tau[20,2]", "tau_normal[20,1]", "tau_normal[20,2]",
+                      "tau_vars[20,1]", "tau_vars[20,2]", "mu_tau"), inc_warmup=T)
+
+traceplot(fit, pars=c("mu[3]", "gamma_sub_m[1]", "gamma_sub_con_m[1]", "gamma_int_m[1,1]", "gamma_visit_s", "gamma_subj_s[1]", "gamma_subj_s[2]", 
+                      "gamma_visit_raw[20,1]", "gamma_visit_raw[20,2]", "gamma_subj_raw[1,20]",
+                      "gamma_subj_raw[2,20]", "gamma_subj_L", "gamma[20,1]", "gamma[20,2]", "gamma_normal[20,1]", "gamma_normal[20,2]",
+                      "gamma_vars[20,1]", "gamma_vars[20,2]", "mu_gamma"), inc_warmup=T)
+
+traceplot(fit, pars=c("mu[4]", "pi_sub_m[1]", "pi_sub_con_m[1]", "pi_int_m[1,1]", "pi_visit_s", "pi_subj_s[1]", "pi_subj_s[2]", 
+                      "pi_visit_raw[20,1]", "pi_visit_raw[20,2]", "pi_subj_raw[1,20]",
+                      "pi_subj_raw[2,20]", "pi_normal[20,1]", "pi_normal[20,2]",
+                      "pi_vars[20,1]", "pi_vars[20,2]", "mu_pi"), inc_warmup=T)
+```
+
+Chains mix nicely.
+
+## Acceptance rate and tree depth per chain
+
+```{r}
+sampler_params<- get_sampler_params(fit, inc_warmup=FALSE)
+
+mean_accept_stat_by_chain<-sapply(sampler_params, function(x) mean(x[, "accept_stat__"]))
+print(mean_accept_stat_by_chain)
+
+max_treedepth_by_chain <- sapply(sampler_params, function(x) max(x[, "treedepth__"]))
+print(max_treedepth_by_chain)
+```
+
+# Model fit (Log Likelihood)
+
+```{r}
+if (estimation==1) {
+  # extract log likelihood for each choice
+  log_likelihood <- extract_log_lik(fit, parameter_name = "log_lik", merge_chains = TRUE)
+
+  # exclude missing trials
+  log_likelihood <- log_likelihood[,log_likelihood[1,]!=-999]
+  
+  # save for model comparison
+  write.table(log_likelihood, file=file.path(out_path, 'log_lik_PH_withC_hierarchical.txt'), append = FALSE, sep = " ", dec = ".", row.names = F, col.names = F)
+
+  # print and plot loo
+  loo1 <- loo(log_likelihood)
+  print(loo1)
+  plot(loo1, label_points = TRUE)
+  
+  waic1 <- waic(log_likelihood)
+  print(waic1)
+}
+```
+
+# Inspect posteriors
+
+## Posterior densities & histograms
+
+```{r}
+stan_hist(fit, pars=c("mu[1]", "A_sub_m[1]", "A_sub_con_m[1]", "A_int_m[1,1]", "A_visit_s", "A_subj_s[1]", "A_subj_s[2]", 
+                      "A_visit_raw[20,1]", "A_visit_raw[20,2]", "A_subj_raw[1,20]",
+                      "A_subj_raw[2,20]", "A_subj_L", "A[20,1]", "A[20,2]", "A_normal[20,1]", "A_normal[20,2]",
+                      "A_vars[20,1]", "A_vars[20,2]", "mu_A"))
+
+stan_hist(fit, pars=c("mu[2]", "tau_sub_m[1]", "tau_sub_con_m[1]", "tau_int_m[1,1]", "tau_visit_s", "tau_subj_s[1]", "tau_subj_s[2]", 
+                      "tau_visit_raw[20,1]", "tau_visit_raw[20,2]", "tau_subj_raw[1,20]",
+                      "tau_subj_raw[2,20]", "tau_subj_L", "tau[20,1]", "tau[20,2]", "tau_normal[20,1]", "tau_normal[20,2]",
+                      "tau_vars[20,1]", "tau_vars[20,2]", "mu_tau"))
+
+stan_hist(fit, pars=c("mu[3]", "gamma_sub_m[1]", "gamma_sub_con_m[1]", "gamma_int_m[1,1]", "gamma_visit_s", "gamma_subj_s[1]", "gamma_subj_s[2]", 
+                      "gamma_visit_raw[20,1]", "gamma_visit_raw[20,2]", "gamma_subj_raw[1,20]",
+                      "gamma_subj_raw[2,20]", "gamma_subj_L", "gamma[20,1]", "gamma[20,2]", "gamma_normal[20,1]", "gamma_normal[20,2]",
+                      "gamma_vars[20,1]", "gamma_vars[20,2]", "mu_gamma"))
+
+stan_hist(fit, pars=c("mu[4]", "pi_sub_m[1]", "pi_sub_con_m[1]", "pi_int_m[1,1]", "pi_visit_s", "pi_subj_s[1]", "pi_subj_s[2]", 
+                      "pi_visit_raw[20,1]", "pi_visit_raw[20,2]", "pi_subj_raw[1,20]",
+                      "pi_subj_raw[2,20]", "pi_normal[20,1]", "pi_normal[20,2]",
+                      "pi_vars[20,1]", "pi_vars[20,2]", "mu_pi"))
+```
+
+## Mean parameter estimates and credible intervals
+
+```{r}
+plot(fit, pars=c("mu[1]", "A_sub_m[1]", "A_sub_con_m[1]", "A_int_m[1,1]", "A_visit_s", "A_subj_s[1]", "A_subj_s[2]", 
+                      "A_visit_raw[20,1]", "A_visit_raw[20,2]", "A_subj_raw[1,20]",
+                      "A_subj_raw[2,20]", "A[20,1]", "A[20,2]", "A_normal[20,1]", "A_normal[20,2]",
+                      "A_vars[20,1]", "A_vars[20,2]", "mu_A"),
+     show_density = FALSE, ci_level = 0.5, outer_level = 0.95, fill_color = "salmon")
+
+plot(fit, pars=c("mu[2]", "tau_sub_m[1]", "tau_sub_con_m[1]", "tau_int_m[1,1]", "tau_visit_s", "tau_subj_s[1]", "tau_subj_s[2]", 
+                      "tau_visit_raw[20,1]", "tau_visit_raw[20,2]", "tau_subj_raw[1,20]",
+                      "tau_subj_raw[2,20]", "tau[20,1]", "tau[20,2]", "tau_normal[20,1]", "tau_normal[20,2]",
+                      "tau_vars[20,1]", "tau_vars[20,2]", "mu_tau"),
+     show_density = FALSE, ci_level = 0.5, outer_level = 0.95, fill_color = "salmon")
+
+plot(fit, pars=c("mu[3]", "gamma_sub_m[1]", "gamma_sub_con_m[1]", "gamma_int_m[1,1]", "gamma_visit_s", "gamma_subj_s[1]", "gamma_subj_s[2]", 
+                      "gamma_visit_raw[20,1]", "gamma_visit_raw[20,2]", "gamma_subj_raw[1,20]",
+                      "gamma_subj_raw[2,20]", "gamma_subj_L", "gamma[20,1]", "gamma[20,2]", "gamma_normal[20,1]", "gamma_normal[20,2]",
+                      "gamma_vars[20,1]", "gamma_vars[20,2]", "mu_gamma"),
+     show_density = FALSE, ci_level = 0.5, outer_level = 0.95, fill_color = "salmon")
+
+plot(fit, pars=c("mu[4]", "pi_sub_m[1]", "pi_sub_con_m[1]", "pi_int_m[1,1]", "pi_visit_s", "pi_subj_s[1]", "pi_subj_s[2]", 
+                      "pi_visit_raw[20,1]", "pi_visit_raw[20,2]", "pi_subj_raw[1,20]",
+                      "pi_subj_raw[2,20]", "pi_normal[20,1]", "pi_normal[20,2]",
+                      "pi_vars[20,1]", "pi_vars[20,2]", "mu_pi"),
+     show_density = FALSE, ci_level = 0.5, outer_level = 0.95, fill_color = "salmon")
+```
+
+## Probability that each parameter is over / under a certain value of interest
+
+```{r}
+posterior <- extract(fit)
+
+sum(posterior$A>0.5)/length(posterior$A)
+sum(posterior$tau>5)/length(posterior$tau)
+sum(posterior$gamma>0.5)/length(posterior$gamma)
+sum(posterior$pi_normal>0)/length(posterior$pi_normal)
+```
+
+# Prior / Posterior predictive checks
+
+## Load real subject data (input for Stan)
+
+```{r}
+load(file.path(behavpath,"Input/stan_data_bandit2arm_delta_main_hierarchical.RData"))
+
+choice <- stan_data[["choice"]]
+
+# only select trials in which all subjects made a choice; c converts matrix to vector with first index (subject) varying fastest
+choice <- c(choice[,1:44,])
+```
+
+## Extract simulated values from generated quantities block
+
+```{r}
+y_pred <- as.matrix(fit, pars = "y_pred")
+y_pred
+
+# create logical vector coding if a column should be included in y_pred
+x <- logical(stan_data$T) # create vector containing total number of trials * FALSE
+a <- c(1:(stan_data$N*44)) # vector with number from 1 to 71 subjects * 44 trials (for cond. 1)
+b <- c(stan_data$N*50+1:(stan_data$N*94-stan_data$N*50)) # vector with numbers from 71 subjects * 50 trials + 1 to 71 subjects * 94 trials (for cond. 2)
+c <- c(a,b) # concatenate both number vectors
+x[c] <- TRUE # set logical value to TRUE if index in c
+
+# exclude 45:50th trial per subject
+y_pred <- y_pred[,x] # include only trials 1:44 for each subject and condition
+```
+
+-   3600 (iterations) \* 7100 (71 subjects \* 50 trials \* 2 conditions) matrix
+
+## Compare estimates of summary statistics between choice and predicted choice
+
+```{r}
+ppc_stat(y = choice, yrep = y_pred, stat = function(y) mean(y))
+```
+
+## Bar plot: count of choices and estimated choices
+
+```{r}
+ppc_bars(y = choice, yrep = y_pred)
+```
+
+## Trial-by-trial plotting of real and simulated choices
+
+### Prepare data
+```{r}
+# real data
+choice_df <- as.data.frame(choice)
+names(choice_df)[1] <- "choice"
+choice_df$ID <- rep(unique(behav_final_redcap$ID), times=2*44)
+choice_df$aud_group <- rep(stan_data$subj_vars, times=44*2)
+choice_df$trial <- rep(rep(c(1:44),each = 71),times=2)
+choice_df$reinforcer_type <- rep(c(0:1), each=71*44)
+
+# simulated data
+y_pred_df <- as.data.frame(t(y_pred)) # create df containing all iterations seperately
+names <- c(seq(1,36000))
+colnames(y_pred_df) <- names
+ 
+y_pred_mean <- summary(fit, pars = "y_pred")$summary[, c("mean")] # create vector containing mean across all iterations
+y_pred_mean_jui <- y_pred_mean[c(TRUE,rep(FALSE,1))] # spilt df into jui and alc df
+y_pred_mean_alc <- y_pred_mean[c(rep(FALSE,1),TRUE)]
+y_pred_mean_jui_summary <- t(matrix(y_pred_mean_jui, nrow = 50)) # subject * trial matrix
+y_pred_mean_alc_summary <- t(matrix(y_pred_mean_alc, nrow = 50))
+y_pred_mean_jui_summary <- y_pred_mean_jui_summary[,1:44] # exclude NA trials
+y_pred_mean_alc_summary <- y_pred_mean_alc_summary[,1:44]
+y_pred_mean_summary <- c(array(c(y_pred_mean_jui_summary,y_pred_mean_alc_summary), dim = c(71,44,2)))
+y_pred_df$mean <- y_pred_mean_summary # combine mean with df containing all iterations seperately
+
+y_pred_sd <- summary(fit, pars = "y_pred")$summary[, c("sd")] # create vector containing sd across all iterations
+y_pred_sd_jui <- y_pred_sd[c(TRUE,rep(FALSE,1))] # spilt df into jui and alc df
+y_pred_sd_alc <- y_pred_sd[c(rep(FALSE,1),TRUE)]
+y_pred_sd_jui_summary <- t(matrix(y_pred_sd_jui, nrow = 50)) # subject * trial matrix
+y_pred_sd_alc_summary <- t(matrix(y_pred_sd_alc, nrow = 50))
+y_pred_sd_jui_summary <- y_pred_sd_jui_summary[,1:44] # exclude NA trials
+y_pred_sd_alc_summary <- y_pred_sd_alc_summary[,1:44]
+y_pred_sd_summary <- c(array(c(y_pred_sd_jui_summary,y_pred_sd_alc_summary), dim = c(71,44,2)))
+y_pred_df$sd <- y_pred_sd_summary # combine mean with df containing all iterations seperately
+
+# combine dfs
+choice_y_pred_df <- cbind(choice_df,y_pred_df)
+
+# get p correct per trial for plotting
+choice_y_pred_df_trial <- choice_y_pred_df %>%
+  group_by(trial) %>%
+  summarise_at(vars(choice,mean,sd), list(p_correct = mean), na.rm=T)
+
+# get p correct per block and trial for plotting
+choice_y_pred_df_block_trial <- choice_y_pred_df %>%
+  group_by(reinforcer_type,trial) %>%
+  summarise_at(vars(choice,mean,sd), list(p_correct = mean), na.rm=T)
+
+# get p correct per block and aud group and trial for plotting
+choice_y_pred_df_block_trial_group <- choice_y_pred_df %>%
+  group_by(aud_group,reinforcer_type,trial) %>%
+  summarise_at(vars(choice,mean,sd), list(p_correct = mean), na.rm=T)
+```
+
+### Plot across AUD group and reinforcer type
+```{r}
+fig1 <- ggplot(choice_y_pred_df_trial, aes(x=trial)) +
+  geom_line(aes(x=trial, y=mean_p_correct, colour = "mean_p_correct")) +
+  geom_line(aes(x=trial, y=choice_p_correct, colour = "choice_p_correct")) +
+  geom_ribbon(aes(x=trial, y=mean_p_correct, ymin = mean_p_correct - sd_p_correct, ymax = mean_p_correct + sd_p_correct), fill = "#0072B2", alpha = .2) +
+  ylab('% correct') +
+  theme_bw(base_size=12)
+
+fig1
+```
+
+# Extract parameter estimates
+
+## Alpha per subject and condition
+
+```{r}
+# mean across iterations of all chains
+A_summary <- as.matrix(summary(fit, pars = "A")$summary[, c("mean")]) 
+```
+
+## Inverse temperature per subject and condition
+
+```{r}
+# mean across iterations of all chains
+tau_summary <- as.matrix(summary(fit, pars = "tau")$summary[, c("mean")]) 
+```
+
+## Gamma
+
+```{r}
+# mean across iterations of all chains
+gamma_summary <- as.matrix(summary(fit, pars = "gamma")$summary[, c("mean")]) 
+```
+
+## Pi
+
+```{r}
+# mean across iterations of all chains
+pi_summary <- as.matrix(summary(fit, pars = "pi_normal")$summary[, c("mean")]) 
+```
+
+## Save parameter estimates together with ID, reinforcer type, aud group information
+
+```{r}
+behav_final_redcap <- behav_final_redcap %>%
+  mutate(reinforcer_type = factor(reinforcer_type, levels = c("J","A")))
+
+params <- behav_final_redcap %>%
+  group_by(ID,aud_group,reinforcer_type,block) %>%
+  summarise_at(vars(correct), list(p_correct = mean), na.rm=T)
+
+params$alpha <- A_summary
+params$invtemp <- tau_summary
+params$gamma <- gamma_summary
+params$pi <- pi_summary
+
+params
+
+if (estimation==1) {
+  write.table(params, file=file.path(out_path, 'Params_PH_rep_hierarchical.txt'), append = FALSE, sep = " ", dec = ".", row.names = F, col.names = c("ID","aud_group","reinforcer_type","block","p_corr","alpha","invtemp","gamma","pi"))
+}
+```
+
+# Trial-by-trial quantities
+
+## RPEs
+
+### Extract as parametric modulators
+
+```{r}
+# mean across iterations of all chains
+PE <- as.matrix(summary(fit, pars = "PE_pred")$summary[, c("mean")])
+PE_jui <- PE[c(TRUE,rep(FALSE,1)), ] # spilt df into jui and alc df
+PE_alc <- PE[c(rep(FALSE,1),TRUE), ]
+PE_jui_summary <- t(matrix(PE_jui, nrow = 50)) # subject * trial matrix
+PE_alc_summary <- t(matrix(PE_alc, nrow = 50))
+PE_summary <- array(c(PE_jui_summary,PE_alc_summary), dim = c(71,50,2)) # combine into subject * trial * condition array
+dimnames(PE_summary)[[1]] <- c(unique(params$ID)) # name rows = subject ID
+
+# prepare jui df
+PE_jui_summary_df <- as.data.frame(c(t(PE_jui_summary)))
+PE_jui_summary_df$ID <- c(rep(unique(params$ID), each=50))
+PE_jui_summary_df$trial <- rep(c(1:50), times=71)
+PE_jui_summary_df$condition <- 'J'
+PE_jui_summary_df <- PE_jui_summary_df %>%
+  rename(PE_pred = "c(t(PE_jui_summary))") %>%
+  mutate_at(c('PE_pred'), ~na_if(.,-999))
+PE_jui_summary_df$absPE_pred <- abs(PE_jui_summary_df$PE_pred)
+
+# prepare alc df
+PE_alc_summary_df <- as.data.frame(c(t(PE_alc_summary)))
+PE_alc_summary_df$ID <- c(rep(unique(params$ID), each=50))
+PE_alc_summary_df$trial <- rep(c(1:50), times=71)
+PE_alc_summary_df$condition <- 'A'
+PE_alc_summary_df <- PE_alc_summary_df %>%
+  rename(PE_pred = "c(t(PE_alc_summary))") %>%
+  mutate_at(c('PE_pred'), ~na_if(.,-999))
+PE_alc_summary_df$absPE_pred <- abs(PE_alc_summary_df$PE_pred)
+
+# combine
+PE_summary_df <- rbind(PE_jui_summary_df,PE_alc_summary_df)
+
+if (estimation==1) {
+  write.table(PE_summary_df, file=file.path(out_path, 'fmri_PEs_PH_rep_hierarchical.txt'), append = FALSE, sep = " ", dec = ".", row.names = F, col.names = F)
+}
+```
+
+### Plot over course of trials
+
+```{r}
+# across subjects
+PE_summary_per_trial <- PE_summary_df %>%
+  group_by(trial,condition) %>%
+  summarise_at(vars(absPE_pred), list(PE_mean = mean), na.rm=T)
+
+fig_PE_per_trial <- ggplot(PE_summary_per_trial, aes(x=trial, y=PE_mean, group = condition)) +
+  geom_point() +
+  geom_line(aes(color=condition)) +
+  theme_bw(base_size=12)
+
+fig_PE_per_trial
+```
+
+## Chosen Q
+
+### Extract as parametric modulators
+
+```{r}
+# mean across iterations of all chains
+Q <- as.matrix(summary(fit, pars = "ev_chosen_pred")$summary[, c("mean")])
+Q_jui <- Q[c(TRUE,rep(FALSE,1)), ] # spilt df into jui and alc df
+Q_alc <- Q[c(rep(FALSE,1),TRUE), ]
+Q_jui_summary <- t(matrix(Q_jui, nrow = 50)) # subject * trial matrix
+Q_alc_summary <- t(matrix(Q_alc, nrow = 50))
+Q_summary <- array(c(Q_jui_summary,Q_alc_summary), dim = c(71,50,2)) # combine into subject * trial * condition array
+dimnames(Q_summary)[[1]] <- c(unique(params$ID)) # name rows = subject ID
+
+# prepare jui df
+Q_jui_summary_df <- as.data.frame(c(t(Q_jui_summary)))
+Q_jui_summary_df$ID <- c(rep(unique(params$ID), each=50))
+Q_jui_summary_df$trial <- rep(c(1:50), times=71)
+Q_jui_summary_df$condition <- 'J'
+Q_jui_summary_df <- Q_jui_summary_df %>%
+  rename(Q_pred = "c(t(Q_jui_summary))") %>%
+  mutate_at(c('Q_pred'), ~na_if(.,-999))
+
+# prepare alc df
+Q_alc_summary_df <- as.data.frame(c(t(Q_alc_summary)))
+Q_alc_summary_df$ID <- c(rep(unique(params$ID), each=50))
+Q_alc_summary_df$trial <- rep(c(1:50), times=71)
+Q_alc_summary_df$condition <- 'A'
+Q_alc_summary_df <- Q_alc_summary_df %>%
+  rename(Q_pred = "c(t(Q_alc_summary))") %>%
+  mutate_at(c('Q_pred'), ~na_if(.,-999))
+
+# combine
+Q_summary_df <- rbind(Q_jui_summary_df,Q_alc_summary_df)
+
+if (estimation==1) {
+  write.table(Q_summary_df, file=file.path(out_path, 'fmri_Qs_PH_rep_hierarchical.txt'), append = FALSE, sep = " ", dec = ".", row.names = F, col.names = F)
+}
+```
+
+### Plot Q of correct and incorrect choice over course of trials
+
+```{r}
+# mean across iterations of all chains
+Q_summary_df <- as.data.frame(summary(fit, pars = "ev_pred")$summary[, c("mean")])
+
+Q_incorr_summary_df <- as.data.frame(Q_summary_df[c(TRUE,rep(FALSE,1)), ]) # spilt df into incorrect and correct card
+Q_corr_summary_df <- as.data.frame(Q_summary_df[c(rep(FALSE,1),TRUE), ])
+Q_incorr_summary_df$choice <- 'incorrect'
+Q_corr_summary_df$choice <- 'correct'
+
+Q_incorr_jui_summary_df <- as.data.frame(Q_incorr_summary_df[c(TRUE,rep(FALSE,1)), ]) # spilt df into jui and alc
+Q_incorr_jui_summary_df$ID <- c(rep(unique(params$ID), each=50))
+Q_incorr_jui_summary_df$trial <- rep(c(1:50), times=71)
+Q_incorr_jui_summary_df$condition<- 'jui'
+Q_incorr_jui_summary_df <- Q_incorr_jui_summary_df %>%
+  rename(Q_pred = "Q_summary_df[c(TRUE, rep(FALSE, 1)), ]") %>%
+  mutate_at(c('Q_pred'), ~na_if(.,-999))
+
+Q_incorr_alc_summary_df <- as.data.frame(Q_incorr_summary_df[c(rep(FALSE,1),TRUE), ])
+Q_incorr_alc_summary_df$ID <- c(rep(unique(params$ID), each=50))
+Q_incorr_alc_summary_df$trial <- rep(c(1:50), times=71)
+Q_incorr_alc_summary_df$condition<- 'alc'
+Q_incorr_alc_summary_df <- Q_incorr_alc_summary_df %>%
+  rename(Q_pred = "Q_summary_df[c(TRUE, rep(FALSE, 1)), ]") %>%
+  mutate_at(c('Q_pred'), ~na_if(.,-999))
+
+Q_corr_jui_summary_df <- as.data.frame(Q_corr_summary_df[c(TRUE,rep(FALSE,1)), ])
+Q_corr_jui_summary_df$ID <- c(rep(unique(params$ID), each=50))
+Q_corr_jui_summary_df$trial <- rep(c(1:50), times=71)
+Q_corr_jui_summary_df$condition<- 'jui'
+Q_corr_jui_summary_df <- Q_corr_jui_summary_df %>%
+  rename(Q_pred = "Q_summary_df[c(rep(FALSE, 1), TRUE), ]") %>%
+  mutate_at(c('Q_pred'), ~na_if(.,-999))
+
+Q_corr_alc_summary_df <- as.data.frame(Q_corr_summary_df[c(rep(FALSE,1),TRUE), ])
+Q_corr_alc_summary_df$ID <- c(rep(unique(params$ID), each=50))
+Q_corr_alc_summary_df$trial <- rep(c(1:50), times=71)
+Q_corr_alc_summary_df$condition<- 'alc'
+Q_corr_alc_summary_df <- Q_corr_alc_summary_df %>%
+  rename(Q_pred = "Q_summary_df[c(rep(FALSE, 1), TRUE), ]") %>%
+  mutate_at(c('Q_pred'), ~na_if(.,-999))
+
+Q_summary_df <- rbind(Q_incorr_jui_summary_df,Q_incorr_alc_summary_df,Q_corr_jui_summary_df,Q_corr_alc_summary_df)
+
+# per choice and trial
+Q_summary_per_trial <- Q_summary_df %>%
+  group_by(trial,choice) %>%
+  summarise_at(vars(Q_pred), list(Q_mean = mean), na.rm=T)
+
+fig_Q_per_trial <- ggplot(Q_summary_per_trial, aes(x=trial, y=Q_mean, group=choice)) +
+  geom_line(aes(color=choice)) +
+  geom_point() +
+  theme_bw(base_size=12)
+
+fig_Q_per_trial
+
+# per choice and trial and condition
+Q_summary_per_trial_cond <- Q_summary_df %>%
+  group_by(trial,choice,condition) %>%
+  summarise_at(vars(Q_pred), list(Q_mean = mean), na.rm=T)
+
+fig_Q_per_trial_cond <- ggplot(Q_summary_per_trial_cond, aes(x=trial, y=Q_mean, group=choice)) +
+  geom_line(aes(color=choice)) +
+  geom_point() +
+  theme_bw(base_size=12) +
+  facet_wrap(~condition, scales="fixed")
+
+fig_Q_per_trial_cond
+
+```
+
+## Choice probability of chosen option
+
+### Extract as parametric modulators
+
+```{r}
+# mean across iterations of all chains
+pc <- as.matrix(summary(fit, pars = "softmax_ev_chosen")$summary[, c("mean")])
+pc_jui <- pc[c(TRUE,rep(FALSE,1)), ] # spilt df into jui and alc df
+pc_alc <- pc[c(rep(FALSE,1),TRUE), ]
+pc_jui_summary <- t(matrix(pc_jui, nrow = 50)) # subject * trial matrix
+pc_alc_summary <- t(matrix(pc_alc, nrow = 50))
+pc_summary <- array(c(pc_jui_summary,pc_alc_summary), dim = c(71,50,2)) # combine into subject * trial * condition array
+dimnames(pc_summary)[[1]] <- c(unique(params$ID)) # name rows = subject ID
+
+# prepare jui df
+pc_jui_summary_df <- as.data.frame(c(t(pc_jui_summary)))
+pc_jui_summary_df$ID <- c(rep(unique(params$ID), each=50))
+pc_jui_summary_df$trial <- rep(c(1:50), times=71)
+pc_jui_summary_df$condition <- 'J'
+pc_jui_summary_df <- pc_jui_summary_df %>%
+  rename(pc = "c(t(pc_jui_summary))") %>%
+  mutate_at(c('pc'), ~na_if(.,-999))
+
+# prepare alc df
+pc_alc_summary_df <- as.data.frame(c(t(pc_alc_summary)))
+pc_alc_summary_df$ID <- c(rep(unique(params$ID), each=50))
+pc_alc_summary_df$trial <- rep(c(1:50), times=71)
+pc_alc_summary_df$condition <- 'A'
+pc_alc_summary_df <- pc_alc_summary_df %>%
+  rename(pc = "c(t(pc_alc_summary))") %>%
+  mutate_at(c('pc'), ~na_if(.,-999))
+
+pc_summary_df <- rbind(pc_jui_summary_df,pc_alc_summary_df)
+
+if (estimation==1) {
+  write.table(pc_summary_df, file=file.path(out_path, 'fmri_choiceprobs_PH_rep_hierarchical.txt'), append = FALSE, sep = " ", dec = ".", row.names = F, col.names = F)
+}
+```
+
+### Plot over course of trials
+
+```{r}
+# across subjects
+pc_summary_per_trial <- pc_summary_df %>%
+  group_by(trial,condition) %>%
+  summarise_at(vars(pc), list(pc_mean = mean), na.rm=T)
+
+fig_pc_per_trial <- ggplot(pc_summary_per_trial, aes(x=trial, y=pc_mean, group = condition)) +
+  geom_point() +
+  geom_line(aes(color=condition)) +
+  theme_bw(base_size=12)
+
+fig_pc_per_trial
+```
+
+## Dynamic learning rate k
+
+### Extract as parametric modulators
+
+```{r}
+# mean across iterations of all chains
+k <- as.matrix(summary(fit, pars = "k_pred")$summary[, c("mean")])
+k_jui <- k[c(TRUE,rep(FALSE,1)), ] # spilt df into jui and alc df
+k_alc <- k[c(rep(FALSE,1),TRUE), ]
+k_jui_summary <- t(matrix(k_jui, nrow = 50)) # subject * trial matrix
+k_alc_summary <- t(matrix(k_alc, nrow = 50))
+k_summary <- array(c(k_jui_summary,k_alc_summary), dim = c(71,50,2)) # combine into subject * trial * condition array
+dimnames(k_summary)[[1]] <- c(unique(params$ID)) # name rows = subject ID
+
+# prepare jui df
+k_jui_summary_df <- as.data.frame(c(t(k_jui_summary)))
+k_jui_summary_df$ID <- c(rep(unique(params$ID), each=50))
+k_jui_summary_df$trial <- rep(c(1:50), times=71)
+k_jui_summary_df$condition <- 'J'
+k_jui_summary_df <- k_jui_summary_df %>%
+  rename(k = "c(t(k_jui_summary))") %>%
+  mutate_at(c('k'), ~na_if(.,-999))
+
+# prepare alc df
+k_alc_summary_df <- as.data.frame(c(t(k_alc_summary)))
+k_alc_summary_df$ID <- c(rep(unique(params$ID), each=50))
+k_alc_summary_df$trial <- rep(c(1:50), times=71)
+k_alc_summary_df$condition <- 'A'
+k_alc_summary_df <- k_alc_summary_df %>%
+  rename(k = "c(t(k_alc_summary))") %>%
+  mutate_at(c('k'), ~na_if(.,-999))
+
+k_summary_df <- rbind(k_jui_summary_df,k_alc_summary_df)
+
+if (estimation==1) {
+  write.table(k_summary_df, file=file.path(out_path, 'fmri_ks_PH_rep.txt'), append = FALSE, sep = " ", dec = ".", row.names = F, col.names = F)
+}
+```
+
+### Plot over course of trials
+
+```{r}
+k_summary_per_trial <- k_summary_df %>%
+  group_by(trial) %>%
+  summarise_at(vars(k), list(k_mean = mean), na.rm=T)
+
+fig_k_per_trial <- ggplot(k_summary_per_trial, aes(x=trial, y=k_mean)) +
+  geom_line() +
+  geom_point() +
+  theme_bw(base_size=12)
+
+fig_k_per_trial
+```

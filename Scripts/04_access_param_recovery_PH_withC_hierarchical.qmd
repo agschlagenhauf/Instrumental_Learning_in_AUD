@@ -1,0 +1,151 @@
+---
+title: "Acces parameter recovery results for hierarchical PH with C model"
+author: "Milena Musial"
+output: html_document
+date: '2024-01-09'
+format: 
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    number-sections: true
+    fig-width: 8
+    fig-height: 6
+    fig-format: svg
+    editor_options: 
+    chunk_output_type: console
+---
+
+# Setup
+
+```{r}
+rm(list=ls())
+libs<-c("rstan", "gdata", "bayesplot", "stringr", "dplyr", "ggplot2")
+sapply(libs, require, character.only=TRUE)
+
+datapath <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_Stan_Modeling'
+out_path <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_Stan_Modeling/Output'
+behavpath <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_DATA'
+
+# load true data
+true_fit_file <- 'fit_n_71_2024-01-02_bandit2arm_delta_PH_withC_hierarchical_estimation1_delta0.9_stepsize0.5.rds'
+true_fit <- readRDS(file.path(out_path, true_fit_file)) # Stan model output
+true_posterior <- extract(true_fit)
+
+# load draws
+draws <- c(read.table(file.path(out_path, 'Parameter_Recovery/draws_bandit2arm_delta_PH_withC_hierarchical.txt'), sep = " ")[1:100,1]) # adapt nrows in case of more simulation runs
+
+# get file names for simulated data results
+sim_fit_files <- list.files(file.path(out_path, 'Parameter_Recovery'), pattern = "*.bandit2arm_delta_PH_withC_hierarchical.*\\.rds$", full.names = F)
+
+color_scheme_set("mix-blue-pink")
+```
+
+# Posterior predictive checks & correlations
+
+```{r}
+for (draw in draws) {
+  print(draw)
+  
+  ## Load true parameters for specific draw
+  true_A <- append(true_posterior$A[draw,,1],true_posterior$A[draw,,2])
+  true_tau <- append(true_posterior$tau[draw,,1],true_posterior$tau[draw,,2])
+  true_gamma <- append(true_posterior$gamma[draw,,1],true_posterior$gamma[draw,,2])
+  true_C <- append(true_posterior$C_const[draw,,1],true_posterior$C_const[draw,,2])
+  
+  ## Extract parameter values from generated quantities block, based on simulated data, for respective draw
+  sim_fit_file <- sim_fit_files[endsWith(sim_fit_files, paste('draw', draw, '.rds', sep=""))]
+  sim_fit <- readRDS(file.path(out_path, 'Parameter_Recovery', sim_fit_file)) # Stan model output
+  
+  sim_A <- as.matrix(sim_fit, pars = "A")
+  sim_tau <- as.matrix(sim_fit, pars = "tau")
+  sim_gamma <- as.matrix(sim_fit, pars = "gamma")
+  sim_C <- as.matrix(sim_fit, pars = "C_const")
+  
+  ## Compare estimates of summary statistics between choice and predicted choice
+  ppc_stat(y = true_A, yrep = sim_A, stat = function(y) mean(y))
+  ppc_scatter_avg(y = true_A, yrep = sim_A, size = 2.5, alpha = 0.8, ref_line = TRUE)
+  
+  ppc_stat(y = true_tau, yrep = sim_tau, stat = function(y) mean(y))
+  ppc_scatter_avg(y = true_tau, yrep = sim_tau, size = 2.5, alpha = 0.8, ref_line = TRUE)
+  
+  ppc_stat(y = true_gamma, yrep = sim_gamma, stat = function(y) mean(y))
+  ppc_scatter_avg(y = true_gamma, yrep = sim_gamma, size = 2.5, alpha = 0.8, ref_line = TRUE)
+  
+  ppc_stat(y = true_C, yrep = sim_C, stat = function(y) mean(y))
+  ppc_scatter_avg(y = true_C, yrep = sim_C, size = 2.5, alpha = 0.8, ref_line = TRUE)
+  
+  # unload rds file to save space
+  rm(sim_fit)
+
+}
+```
+
+-   3600 (iterations) \* 7100 (71 subjects \* 50 trials \* 2 conditions) matrix
+
+# Correlations between true parameters and parameters based on simulated data
+
+```{r}
+true_A_all <- c()
+true_tau_all <- c()
+true_gamma_all <- c()
+true_C_all <- c()
+
+sim_A_all <- c()
+sim_tau_all <- c()
+sim_gamma_all <- c()
+sim_C_all <- c()
+
+for (draw in draws) {
+  
+  ## Load true parameters for specific draw
+  true_A <- append(true_posterior$A[draw,,1],true_posterior$A[draw,,2])
+  true_tau <- append(true_posterior$tau[draw,,1],true_posterior$tau[draw,,2])
+  true_gamma <- append(true_posterior$gamma[draw,,1],true_posterior$gamma[draw,,2])
+  true_C <- append(true_posterior$C_const[draw,,1],true_posterior$C_const[draw,,2])
+  
+  # Append to true parameters for all draws
+  true_A_all <- append(true_A_all, true_A)
+  true_tau_all <- append(true_tau_all, true_tau)
+  true_gamma_all <- append(true_gamma_all, true_gamma)
+  true_C_all <- append(true_C_all, true_C)
+  
+  ## Extract parameter values from generated quantities block, based on simulated data, for respective draw
+  sim_fit_file <- sim_fit_files[endsWith(sim_fit_files, paste('draw', draw, '.rds', sep=""))]
+  sim_fit <- readRDS(file.path(out_path, 'Parameter_Recovery', sim_fit_file)) # Stan model output
+  
+  mean_sim_A <- get_posterior_mean(sim_fit, pars = c("A"))[,5] # column 5 contains all chains combined, 1-4 include each chain separately
+  mean_sim_A_jui <- mean_sim_A[c(TRUE,rep(FALSE,1))]
+  mean_sim_A_alc <- mean_sim_A[c(rep(FALSE,1),TRUE)]
+  mean_sim_A <- append(mean_sim_A_jui, mean_sim_A_alc)
+  
+  mean_sim_tau <- get_posterior_mean(sim_fit, pars = c("tau"))[,5]
+  mean_sim_tau_jui <- mean_sim_tau[c(TRUE,rep(FALSE,1))]
+  mean_sim_tau_alc <- mean_sim_tau[c(rep(FALSE,1),TRUE)]
+  mean_sim_tau <- append(mean_sim_tau_jui, mean_sim_tau_alc)
+  
+  mean_sim_gamma <- get_posterior_mean(sim_fit, pars = c("gamma"))[,5]
+  mean_sim_gamma_jui <- mean_sim_gamma[c(TRUE,rep(FALSE,1))]
+  mean_sim_gamma_alc <- mean_sim_gamma[c(rep(FALSE,1),TRUE)]
+  mean_sim_gamma <- append(mean_sim_gamma_jui, mean_sim_gamma_alc)
+  
+  mean_sim_C <- get_posterior_mean(sim_fit, pars = c("C_const"))[,5]
+  mean_sim_C_jui <- mean_sim_C[c(TRUE,rep(FALSE,1))]
+  mean_sim_C_alc <- mean_sim_C[c(rep(FALSE,1),TRUE)]
+  mean_sim_C <- append(mean_sim_C_jui, mean_sim_C_alc)
+  
+  # Append to simulated parameters for all draws
+  sim_A_all <- append(sim_A_all, mean_sim_A)
+  sim_tau_all <- append(sim_tau_all, mean_sim_tau)
+  sim_gamma_all <- append(sim_gamma_all, mean_sim_gamma)
+  sim_C_all <- append(sim_C_all, mean_sim_C)
+  
+}
+```
+
+```{r}
+params <- data.frame(true_A_all,true_tau_all,true_gamma_all,true_C_all,sim_A_all,sim_tau_all,sim_gamma_all,sim_C_all)
+cor(params)
+pairs(params)
+```

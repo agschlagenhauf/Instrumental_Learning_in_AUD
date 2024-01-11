@@ -1,0 +1,446 @@
+---
+title: "Acces Stan fitting results & prepare parametric modulators for fMRI analysis"
+author: "Milena Musial"
+output: html_document
+date: '2023-08-20'
+format: 
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    number-sections: true
+    fig-width: 8
+    fig-height: 6
+    fig-format: svg
+    editor_options: 
+    chunk_output_type: console
+---
+
+# Setup
+
+```{r}
+rm(list=ls())
+libs<-c("rstan", "gdata", "bayesplot", "stringr", "dplyr", "ggplot2")
+sapply(libs, require, character.only=TRUE)
+
+datapath <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_Stan_Modeling'
+out_path <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_Stan_Modeling/Output'
+behavpath <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_DATA'
+
+fit_file <- 'fit_n_142_2023-09-25_bandit2arm_delta_PH_withC_DU_estimation0_delta0.99_stepsize0.1.rds' # chose fit object with estimation
+
+fit <- readRDS(file.path(out_path, fit_file)) # Stan model output
+load(file.path(behavpath,"Behav/behav_final_redcap_n71.RData")) # Behav and redcap data
+
+color_scheme_set("mix-blue-pink")
+```
+
+
+Load data from prior predictive checks (estimation==0) or from model fitting (estimation==1)?
+```{r}
+estimation <- 0
+```
+
+# Output summary (contents of fit object)
+
+-   mu_pr: raw, untransformed group-level means of learning rate (alpha) and inverse temperature (tau)
+
+-   sigma: raw, untransformed group-level variance of learning rate (alpha) and inverse temperature (tau)
+
+-   A_pr: raw, untransformed subject-level learning rates (alpha)
+
+-   tau_pr: raw, untransformed subject-level inverse temperature (tau)
+
+-   gamma_pr: raw, untransformed subject-level decay constant (gamma)
+
+-   C_pr: raw, untransformed subject-level arbitrary constant (C) according to Diederen et al. (2016)
+
+-   **A**: transformed subject-level learning rates (alpha), range 0-1
+
+-   **tau**: transformed subject-level inverse temperature (tau), range 0-5
+
+-   **gamma**: transformed subject-level decay constant (gamma), range 0-1
+
+-   **C**: transformed subject-level arbitrary constant (C) according to Diederen et al. (2016), range 0-1
+
+-   **mu_A**: group-level mean of transformed subject-level learning rates (alpha), range 0-1
+
+-   **mu_tau**: group-level mean of transformed subject-level inverse temperature (tau), range 0-5
+
+-   **mu_gamma**: group-level mean of transformed subject-level decay constant (gamma), range 0-1
+
+-   **mu_C**: group-level mean of transformed subject-level arbitrary constant (C), range 0-1
+
+-   log_lik: subject.level log likelihood for model comparisons
+
+-   y_pred: choice data generated from estimated parameters, for posterior predictive checks
+
+-   k_pred: dynamic learning rate estimated per subject and trial based on empirical data
+
+-   PE_pred: PEs for both choices per subject and trial (real and fictive updating)
+
+-   PE_chosen_pred: PEs for chosen card per subject and trial
+
+-   ev_pred: Q-values for both choices per subject and trial
+
+-   ev_chosen_pred: Q-values for chosen card per subject and trial
+
+# Convergence / sampler diagnostics
+
+## Summary statistics for parameters
+
+### Across chains
+
+```{r}
+  fit_sum <- summary(fit)
+  
+  # overall summary
+  #print(fit_sum$summary)
+  
+  # max Rhat for entire output including generated quantities
+  max(fit_sum$summary[,10])
+  max(fit_sum$summary[,10], na.rm=T)
+  
+  # min effective sample size for entire output including generated quantities
+  min(fit_sum$summary[,9])
+  min(fit_sum$summary[,9], na.rm=T)
+```
+
+-   All `Rhat` values are \< 1.01, meaning that chains have converged! \`
+
+-   All `n_eff` (measure of the effective sample size) are \> 1/100th (360) or 1/1000th (36) of number of iterations (3600). Anything over an `n_eff` of 100 is usually "fine"
+
+### For each chain separately
+
+No Rhat or n_eff given here. This is just done for reasons of completeness.
+
+```{r}
+print(fit_sum$c_summary) 
+```
+
+## Traceplots of model parameters
+
+```{r}
+  traceplot(fit, pars="mu_A", inc_warmup=T)
+  traceplot(fit, pars="sigma[1]", inc_warmup=T)
+  traceplot(fit, pars="mu_pr[1]", inc_warmup=T) # untransformed mean alpha
+  traceplot(fit, pars="A_pr[100]", inc_warmup=T) # untransformed subject-level alpha
+  
+  traceplot(fit, pars="mu_tau",inc_warmup=T)
+  traceplot(fit, pars="sigma[2]", inc_warmup=T)
+  traceplot(fit, pars="mu_pr[2]", inc_warmup=T) # untransformed mean tau
+  traceplot(fit, pars="tau_pr[100]", inc_warmup=T) # untransformed subject-level tau
+  
+  traceplot(fit, pars="mu_gamma", inc_warmup=T) 
+  traceplot(fit, pars="sigma[3]", inc_warmup=T)
+  traceplot(fit, pars="mu_pr[3]", inc_warmup=T) # untransformed mean gamma
+  traceplot(fit, pars="gamma_pr[100]", inc_warmup=T) # untransformed single subject-level gamma
+  
+  traceplot(fit, pars="mu_C", inc_warmup=T) 
+  traceplot(fit, pars="sigma[4]", inc_warmup=T)
+  traceplot(fit, pars="mu_pr[4]", inc_warmup=T) # untransformed mean gamma
+  traceplot(fit, pars="C_pr[100]", inc_warmup=T) # untransformed single subject-level gamma
+```
+
+Chains converge nicely.
+
+## Acceptance rate and tree depth per chain
+
+```{r}
+  sampler_params<- get_sampler_params(fit, inc_warmup=FALSE)
+  
+  mean_accept_stat_by_chain<-sapply(sampler_params, function(x) mean(x[, "accept_stat__"]))
+  print(mean_accept_stat_by_chain)
+  
+  max_treedepth_by_chain <- sapply(sampler_params, function(x) max(x[, "treedepth__"]))
+  print(max_treedepth_by_chain)
+```
+
+# Inspect posteriors
+
+## Posterior densities & histograms
+
+```{r}
+stan_hist(fit, pars=c("mu_A",'mu_pr[1]',"mu_tau",'mu_pr[2]',"mu_gamma",'mu_pr[3]',"mu_C",'mu_pr[4]'))
+```
+
+## Mean parameter estimates and credible intervals
+
+```{r}
+plot(fit, pars=c("mu_A", "mu_pr[1]", "mu_tau", "mu_pr[2]", 'mu_gamma', 'mu_pr[3]', 'mu_C', 'mu_pr[4]'), show_density = FALSE, ci_level = 0.5, outer_level = 0.95, fill_color = "salmon")
+```
+
+## Probability that each parameter is over / under a certain value of interest
+
+```{r}
+  posterior <- extract(fit)
+  
+  sum(posterior$A>0.1)/length(posterior$A)
+  sum(posterior$tau>5)/length(posterior$tau)
+  sum(posterior$gamma>0.5)/length(posterior$gamma)
+  sum(posterior$C>0.5)/length(posterior$C)
+```
+
+# Prior / Posterior predictive checks
+
+## Load real choice data (not considered in prior)
+
+```{r}
+load(file.path(datapath,"Input/stan_data.RData"))
+
+choice <- stan_data[["choice"]]
+
+# only select trials in which all subjects made a choice
+choice <- c(choice[,1:47])
+```
+
+-   1:7100 vector with 142 blocks \* 50 trials including -999 values
+
+## Extract simulated choice values
+
+```{r}
+y_pred_cat_log_rng <- as.matrix(fit, pars = "y_pred_cat_log_rng")
+
+# create logical vector coding if a column should be included in y_pred
+x <- logical(stan_data$T)
+a <- c(1:(stan_data$N*47))
+x[a] <- TRUE
+
+# exclude 48:50th trial per subject
+y_pred_cat_log_rng <- y_pred_cat_log_rng[,x]
+```
+
+-   3600 (iterations) \* 7100 (142 blocks \* 50 trials) matrix
+
+## Compare estimates of summary statistics between choice and predicted choice
+
+```{r}
+ppc_stat(y = choice, yrep = y_pred_cat_log_rng, stat = function(y) mean(y, na.rm=T))
+```
+
+## Bar plot: count of choices and estimated choices
+
+```{r}
+ppc_bars(y = choice, yrep = y_pred_cat_log_rng)
+```
+
+# Extract parameter estimates
+
+## Alpha per subject
+
+```{r}
+# mean across iterations of all chains
+A_summary <- as.matrix(summary(fit, pars = "A")$summary[, c("mean")]) 
+```
+
+## Inverse temperature per subject
+
+```{r}
+# mean across iterations of all chains
+tau_summary <- as.matrix(summary(fit, pars = "tau")$summary[, c("mean")]) 
+```
+
+## Gamma per subject
+
+```{r}
+# mean across iterations of all chains
+gamma_summary <- as.matrix(summary(fit, pars = "gamma")$summary[, c("mean")]) 
+```
+
+## C per subject
+
+```{r}
+# mean across iterations of all chains
+C_summary <- as.matrix(summary(fit, pars = "C")$summary[, c("mean")]) 
+```
+
+## Save parameter estimates together with ID, reinforcer type, aud group information
+
+```{r}
+params <- behav_final_redcap %>%
+  group_by(ID,aud_group,reinforcer_type,block) %>%
+  summarise_at(vars(correct), list(p_correct = mean), na.rm=T)
+
+params$alpha <- A_summary
+params$invtemp <- tau_summary
+params$gamma <- gamma_summary
+params$C <- C_summary
+
+params
+
+if (estimation==1) {
+  write.table(params, file=file.path(out_path, 'Params_PH_withC_DU.txt'), append = FALSE, sep = " ", dec = ".", row.names = F, col.names = c("ID","aud_group","reinforcer_type","block","p_corr","alpha","invtemp","gamma","C"))
+}
+```
+
+# Trial-by-trial quantities (can be used as fMRI parametric modulators)
+
+## RPEs
+
+### Extract as parametric modulators
+
+```{r}
+# mean across iterations of all chains
+PE_summary <- as.matrix(summary(fit, pars = "PE_chosen_pred")$summary[, c("mean")])
+PE_summary <- t(matrix(PE_summary, nrow = 50)) # trial x subject matrix
+
+mods <- cbind(matrix(params$ID),PE_summary)
+```
+
+#### PE for chosen option only
+
+```{r}
+# mean across iterations of all chains
+PE_summary <- as.data.frame(summary(fit, pars = "PE_chosen_pred")$summary[, c("mean")])
+PE_summary$ID_block <- behav_final_redcap$ID_block
+PE_summary$trial_block <- behav_final_redcap$trial_block
+PE_summary <- PE_summary %>%
+  rename(PE_chosen_pred = `summary(fit, pars = "PE_chosen_pred")$summary[, c("mean")]`) %>%
+  mutate_at(c('PE_chosen_pred'), ~na_if(., -999))
+
+# across subjects
+PE_summary_per_trial <- PE_summary %>%
+  group_by(trial_block) %>%
+  summarise_at(vars(PE_chosen_pred), list(PE_mean = mean), na.rm=T)
+
+fig_PE_per_trial <- ggplot(PE_summary_per_trial, aes(x=trial_block, y=PE_mean)) +
+  geom_point() +
+  geom_line() +
+  theme_bw(base_size=12)
+
+fig_PE_per_trial
+```
+
+#### PE for both options
+
+```{r}
+# mean across iterations of all chains
+PE_summary <- as.data.frame(summary(fit, pars = "PE_pred")$summary[, c("mean")])
+PE_summary$ID_block <- behav_final_redcap$ID_block
+PE_summary$trial_block <- behav_final_redcap$trial_block
+PE_summary <- PE_summary %>%
+  rename(PE_pred = `summary(fit, pars = "PE_pred")$summary[, c("mean")]`) %>%
+  mutate_at(c('PE_pred'), ~na_if(., -999))
+PE_summary$row_odd <- seq_len(nrow(PE_summary)) %% 2
+
+# incorrect card
+PE_summary_1 <- PE_summary[PE_summary$row_odd==1,]
+
+PE_summary_per_trial_1 <- PE_summary_1 %>%
+  group_by(trial_block) %>%
+  summarise_at(vars(PE_pred), list(PE_mean = mean), na.rm=T)
+
+fig_PE_per_trial_1 <- ggplot(PE_summary_per_trial_1, aes(x=trial_block, y=PE_mean)) +
+  geom_line() +
+  geom_point() +
+  theme_bw(base_size=12)
+
+fig_PE_per_trial_1
+
+# correct card
+PE_summary_2 <- PE_summary[PE_summary$row_odd==0,]
+
+PE_summary_per_trial_2 <- PE_summary_2 %>%
+  group_by(trial_block) %>%
+  summarise_at(vars(PE_pred), list(PE_mean = mean), na.rm=T)
+
+fig_PE_per_trial_2 <- ggplot(PE_summary_per_trial_2, aes(x=trial_block, y=PE_mean)) +
+  geom_line() +
+  geom_point() +
+  theme_bw(base_size=12)
+
+fig_PE_per_trial_2
+```
+
+## Q-values
+
+### Extract as parametric modulators
+
+```{r}
+# mean across iterations of all chains
+Q_summary <- as.matrix(summary(fit, pars = "ev_chosen_pred")$summary[, c("mean")])
+Q_summary <- t(matrix(Q_summary, nrow = 50)) # trial x subject matrix
+
+mods <- cbind(mods,Q_summary)
+```
+
+### Plot over course of trials
+
+```{r}
+# mean across iterations of all chains
+Q_summary <- as.data.frame(summary(fit, pars = "ev_pred")$summary[, c("mean")])
+Q_summary$ID_block <- behav_final_redcap$ID_block
+Q_summary$trial_block <- behav_final_redcap$trial_block
+Q_summary <- Q_summary %>%
+  rename(Q_pred = `summary(fit, pars = "ev_pred")$summary[, c("mean")]`) %>%
+  mutate_at(c('Q_pred'), ~na_if(., -999))
+Q_summary$row_odd <- seq_len(nrow(Q_summary)) %% 2
+
+# incorrect card
+Q_summary_1 <- Q_summary[Q_summary$row_odd==1,]
+
+Q_summary_per_trial_1 <- Q_summary_1 %>%
+  group_by(trial_block) %>%
+  summarise_at(vars(Q_pred), list(Q_mean = mean), na.rm=T)
+
+fig_Q_per_trial_1 <- ggplot(Q_summary_per_trial_1, aes(x=trial_block, y=Q_mean)) +
+  geom_line() +
+  geom_point() +
+  theme_bw(base_size=12)
+
+fig_Q_per_trial_1
+
+# correct card
+Q_summary_2 <- Q_summary[Q_summary$row_odd==0,]
+
+Q_summary_per_trial_2 <- Q_summary_2 %>%
+  group_by(trial_block) %>%
+  summarise_at(vars(Q_pred), list(Q_mean = mean), na.rm=T)
+
+fig_Q_per_trial_2 <- ggplot(Q_summary_per_trial_2, aes(x=trial_block, y=Q_mean)) +
+  geom_line() +
+  geom_point() +
+  theme_bw(base_size=12)
+
+fig_Q_per_trial_2
+```
+
+## Dynamic learning rate k
+
+### Extract as parametric modulators
+
+```{r}
+# mean across iterations of all chains
+k_summary <- as.matrix(summary(fit, pars = "k_pred")$summary[, c("mean")])
+k_summary <- t(matrix(k_summary, nrow = 50)) # trial x subject matrix
+
+mods <- cbind(mods,k_summary)
+
+if (estimation==1) {
+  write.table(mods, file=file.path(out_path, 'fmri_param_modulators_PH_withC.txt'), append = FALSE, sep = " ", dec = ".", row.names = F, col.names = F)
+}
+```
+
+### Plot over course of trials
+
+```{r}
+# mean across iterations of all chains
+k_summary <- as.data.frame(summary(fit, pars = "k_pred")$summary[, c("mean")])
+k_summary$ID_block <- behav_final_redcap$ID_block
+k_summary$trial_block <- behav_final_redcap$trial_block
+k_summary <- k_summary %>%
+  rename(k_pred = `summary(fit, pars = "k_pred")$summary[, c("mean")]`) %>%
+  mutate_at(c('k_pred'), ~na_if(., -999))
+
+k_summary_per_trial <- k_summary %>%
+  group_by(trial_block) %>%
+  summarise_at(vars(k_pred), list(k_mean = mean), na.rm=T)
+
+fig_k_per_trial <- ggplot(k_summary_per_trial, aes(x=trial_block, y=k_mean)) +
+  geom_line() +
+  geom_point() +
+  theme_bw(base_size=12)
+
+fig_k_per_trial
+```

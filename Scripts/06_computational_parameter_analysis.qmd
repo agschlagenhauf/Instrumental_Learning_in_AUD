@@ -1,0 +1,217 @@
+---
+title: "Analysis of computational modeling results"
+author: "Milena Musial"
+output: html_document
+date: '2023-12-18'
+format: 
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    number-sections: true
+    fig-width: 8
+    fig-height: 6
+    fig-format: svg
+    editor_options: 
+    chunk_output_type: console
+---
+
+# Setup
+
+```{r}
+rm(list=ls())
+libs<-c("rstan", "gdata", "bayesplot", "stringr", "dplyr", "ggplot2", "loo", "hBayesDM")
+sapply(libs, require, character.only=TRUE)
+
+datapath <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_Stan_Modeling'
+out_path <- '/fast/work/groups/ag_schlagenhauf/B01_FP1_WP2/ILT_Stan_Modeling/Output'
+
+fit_file <- 'fit_n_71_2024-01-02_bandit2arm_delta_PH_withC_hierarchical_estimation1_delta0.9_stepsize0.5.rds'
+
+fit <- readRDS(file.path(out_path, fit_file)) # Stan model output
+
+color_scheme_set("mix-blue-pink")
+```
+
+# Bayesian model comparison
+
+## Preps
+
+```{r}
+# load log likelihood per model
+log_lik_main <- read.table(file.path(outpath, 'log_lik_main_hierarchical.txt'), header = F)
+r_eff_main <- relative_eff(exp(log_lik_main)) 
+log_lik_PH_withC <- read.table(file.path(outpath, 'log_lik_PH_withC_hierarchical.txt'), header = F)
+r_eff_PH_withC <- relative_eff(exp(log_lik_PH_withC)) 
+```
+
+## Fit per model
+
+```{r}
+loo_main <- loo(log_lik_main, r_eff=r_eff_main)
+print(loo_main)
+plot(loo_main)
+
+loo_PH_withC <- loo(log_lik_PH_withC, r_eff=r_eff_PH_withC)
+print(loo_PH_withC)
+plot(loo_PH_withC)
+```
+
+## Compare model fit 
+
+```{r}
+comp <- loo_compare(loo_main, loo_PH_withC)
+print(comp)
+```
+
+# Bayesian parameter analysis
+
+```{r}
+posterior_draws <- extract(fit, pars = c("A_sub_m", "tau_sub_m", "gamma_sub_m", "C_sub_m", "A_sub_con_m", "tau_sub_con_m", "gamma_sub_con_m", "C_sub_con_m"))
+
+HDIofMCMC(posterior_draws$A_sub_m)
+HDIofMCMC(posterior_draws$tau_sub_m)
+HDIofMCMC(posterior_draws$gamma_sub_m)
+HDIofMCMC(posterior_draws$C_sub_m)
+HDIofMCMC(posterior_draws$A_sub_con_m)
+HDIofMCMC(posterior_draws$tau_sub_con_m)
+HDIofMCMC(posterior_draws$gamma_sub_con_m)
+HDIofMCMC(posterior_draws$C_sub_con_m)
+
+plotHDI(posterior_draws$A_sub_m)
+plotHDI(posterior_draws$tau_sub_m)
+plotHDI(posterior_draws$gamma_sub_m)
+plotHDI(posterior_draws$C_sub_m)
+plotHDI(posterior_draws$A_sub_con_m)
+plotHDI(posterior_draws$tau_sub_con_m)
+plotHDI(posterior_draws$gamma_sub_con_m)
+plotHDI(posterior_draws$C_sub_con_m)
+```
+
+# Plotting
+
+## Alpha
+
+```{r}
+fig1 <- ggplot(params, aes(reinforcer_type, y = alpha, fill=reinforcer_type)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) + 
+  geom_jitter(shape=16, position=position_jitter(0.2)) +
+  facet_wrap(~aud_group, scales="free_y") +
+  scale_x_discrete("Reinforcer type", labels=c('alcohol', 'juice')) +
+  scale_y_continuous("alpha") +
+  scale_fill_manual("Reinforcer type", values = cbPalette[c(6,8)]) +
+  theme_bw(base_size=12) +
+  theme(legend.position = "none")
+
+fig1
+```
+
+## Inverse temperature
+
+```{r}
+fig2 <- ggplot(params, aes(reinforcer_type, y = invtemp, fill=reinforcer_type)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) + 
+  geom_jitter(shape=16, position=position_jitter(0.2)) +
+  facet_wrap(~aud_group, scales="free_y") +
+  scale_x_discrete("Reinforcer type", labels=c('alcohol', 'juice')) +
+  scale_y_continuous("beta") +
+  scale_fill_manual("Reinforcer type", values = cbPalette[c(6,8)]) +
+  theme_bw(base_size=12) +
+  theme(legend.position = "none")
+
+fig2
+```
+
+## Gamma
+
+```{r}
+fig3 <- ggplot(params, aes(reinforcer_type, y = gamma, fill=reinforcer_type)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) + 
+  geom_jitter(shape=16, position=position_jitter(0.2)) +
+  facet_wrap(~aud_group, scales="free_y") +
+  scale_x_discrete("Reinforcer type", labels=c('alcohol', 'juice')) +
+  scale_y_continuous("gamma") +
+  scale_fill_manual("Reinforcer type", values = cbPalette[c(6,8)]) +
+  theme_bw(base_size=12) +
+  theme(legend.position = "none")
+
+fig3
+```
+
+## C
+
+```{r}
+fig4 <- ggplot(params, aes(reinforcer_type, y = C, fill=reinforcer_type)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) + 
+  geom_jitter(shape=16, position=position_jitter(0.2)) +
+  facet_wrap(~aud_group, scales="free_y") +
+  scale_x_discrete("Reinforcer type", labels=c('alcohol', 'juice')) +
+  scale_y_continuous("C") +
+  scale_fill_manual("Reinforcer type", values = cbPalette[c(6,8)]) +
+  theme_bw(base_size=12) +
+  theme(legend.position = "none")
+
+fig4
+```
+
+
+# Frequentist Linear mixed-effects regression
+
+```{r}
+# Preps
+params<-read.table(file.path(out_path, 'Params_PH_withC_hierarchical.txt'), header = T)
+```
+
+## Alpha
+
+```{r}
+m_alpha <- lmer(alpha ~ 1 + reinforcer_type*aud_group + (1 | ID), data=params, control=lmerControl(calc.derivs=FALSE), REML=F)
+
+tab_model(m_alpha,
+          dv.labels=c("m_correct"), digits=3, digits.re=2, 
+          show.se=TRUE, show.stat=TRUE, show.df=TRUE, show.ci=FALSE,CSS = css_theme("cells"))
+```
+
+We cannot include reinforcer type as random effect as the model would be unidentifiable. Therefore, the model only includes a random intercept.
+
+## Inverse temperature
+
+```{r}
+m_invtemp <- lmer(invtemp ~ 1 + reinforcer_type*aud_group + (1 | ID), data=params, control=lmerControl(calc.derivs=FALSE), REML=F)
+
+tab_model(m_invtemp,
+          dv.labels=c("m_invtemp"), digits=3, digits.re=2, 
+          show.se=TRUE, show.stat=TRUE, show.df=TRUE, show.ci=FALSE,CSS = css_theme("cells"))
+```
+
+We cannot include reinforcer type as random effect as the model would be unidentifiable. Therefore, the model only includes a random intercept.
+
+## Gamma
+
+```{r}
+m_gamma <- lmer(gamma ~ 1 + reinforcer_type*aud_group + (1 | ID), data=params, control=lmerControl(calc.derivs=FALSE), REML=F)
+
+tab_model(m_gamma,
+          dv.labels=c("m_gamma"), digits=3, digits.re=2, 
+          show.se=TRUE, show.stat=TRUE, show.df=TRUE, show.ci=FALSE,CSS = css_theme("cells"))
+```
+
+We cannot include reinforcer type as random effect as the model would be unidentifiable. Therefore, the model only includes a random intercept.
+
+## Gamma
+
+```{r}
+m_C <- lmer(C ~ 1 + reinforcer_type*aud_group + (1 | ID), data=params, control=lmerControl(calc.derivs=FALSE), REML=F)
+
+tab_model(m_C,
+          dv.labels=c("m_C"), digits=3, digits.re=2, 
+          show.se=TRUE, show.stat=TRUE, show.df=TRUE, show.ci=FALSE,CSS = css_theme("cells"))
+```
+
+We cannot include reinforcer type as random effect as the model would be unidentifiable. Therefore, the model only includes a random intercept.
+
